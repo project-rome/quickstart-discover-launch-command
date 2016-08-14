@@ -87,5 +87,11 @@ namespace Rome_DLC
             }
              
         }
+
+        private void KeepServiceOpenCheckBox_OnClick(object sender, RoutedEventArgs e)
+        {
+            if (KeepServiceOpenCheckBox.IsChecked != null)
+                RemoteSystemService.KeepConnectionOpen = (bool) KeepServiceOpenCheckBox.IsChecked;
+        }
     }
 }

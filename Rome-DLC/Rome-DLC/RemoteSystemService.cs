@@ -15,6 +15,9 @@ namespace Rome_DLC
     {
         private static BackgroundTaskDeferral _serviceDeferral;
         public static event EventHandler<string> OnStatusUpdateMessage;
+        public static bool KeepConnectionOpen { get; set; } = true;
+        private static int _connectionRetryCount = 5;
+        private static AppServiceConnection _appServiceConnection;
 
         public static async Task LaunchAndConnect(RemoteSystem remoteSystem)
         {
@@ -35,43 +38,83 @@ namespace Rome_DLC
         }
         public static async Task SendMessageToRemoteSystemAsync(RemoteSystem remoteSystem, string messageString)
         {
-            //Connect App Service
-            var connectionRequest = new RemoteSystemConnectionRequest(remoteSystem);
 
-            using (var connection = new AppServiceConnection
+            if (await OpenAppServiceConnectionAsync(remoteSystem) == AppServiceConnectionStatus.Success)
             {
-                AppServiceName = "com.project-rome.echo",
-                PackageFamilyName = Package.Current.Id.FamilyName
-            })
-            {
-                var status = await connection.OpenRemoteAsync(connectionRequest);
-
-                if (status == AppServiceConnectionStatus.Success)
+                var inputs = new ValueSet { ["message"] = messageString };
+                var response = await _appServiceConnection.SendMessageAsync(inputs);
+                if (response.Status == AppServiceResponseStatus.Success)
                 {
-                    var inputs = new ValueSet { ["message"] = messageString };
-                    var response = await connection.SendMessageAsync(inputs);
-                    if (response.Status == AppServiceResponseStatus.Success)
+                    if (response.Message.ContainsKey("result"))
                     {
-                        if (response.Message.ContainsKey("result"))
-                        {
-                            var resultText = response.Message["result"].ToString();
+                        var resultText = response.Message["result"].ToString();
 
-                            StatusWrite("Sent message: \"" + messageString + "\" to device: " + remoteSystem.DisplayName +
-                                        " response: " + resultText);
-                        }
-                    }
-                    else
-                    {
-                        StatusWrite("Error: " + response.Status);
+                        StatusWrite("Sent message: \"" + messageString + "\" to device: " + remoteSystem.DisplayName +
+                                    " response: " + resultText);
                     }
                 }
                 else
                 {
-                    StatusWrite("Error: " + status);
+                    StatusWrite("Error: " + response.Status);
+                }
+
+                if (KeepConnectionOpen == false)
+                {
+                    CloseAppServiceConnection();
                 }
             }
-
+            
         }
+
+        private static void CloseAppServiceConnection()
+        {
+            if (_appServiceConnection != null)
+            {
+                _appServiceConnection.Dispose();
+                _appServiceConnection = null;
+            }
+        }
+
+        private static async Task<AppServiceConnectionStatus> OpenAppServiceConnectionAsync(RemoteSystem remoteSystem)
+        {
+            //Connect App Service
+            var connectionRequest = new RemoteSystemConnectionRequest(remoteSystem);
+
+            if (_appServiceConnection == null)
+            {
+                _appServiceConnection = new AppServiceConnection()
+                {
+                    AppServiceName = "com.project-rome.echo",
+                    PackageFamilyName = Package.Current.Id.FamilyName
+                };
+
+                _appServiceConnection.ServiceClosed += async (sender, args) =>
+                {
+                    StatusWrite("AppServiceConnection closed to: " + remoteSystem.DisplayName + ", reason: " + args.Status);
+
+                    if (--_connectionRetryCount > 0)
+                    {
+                        await OpenAppServiceConnectionAsync(remoteSystem);
+                    }
+                };
+
+                var status = await _appServiceConnection.OpenRemoteAsync(connectionRequest);
+
+                if (status != AppServiceConnectionStatus.Success)
+                {
+                    StatusWrite("Error: " + status);
+                    _appServiceConnection = null;
+                }
+
+                StatusWrite("AppServiceConnection opened to: " + remoteSystem.DisplayName);
+                _connectionRetryCount = 5;
+
+                return status;
+            }
+
+            return AppServiceConnectionStatus.Success;
+        }
+
         public static void OnMessageReceived(BackgroundActivatedEventArgs args)
         {
             var taskInstance = args.TaskInstance;
